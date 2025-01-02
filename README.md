@@ -1,2 +1,2 @@
-# SubZero
-A bug bounty tool that does the recon work for you.
+# MonkeyWrench
+A simple 403 bypasser written in Go.
