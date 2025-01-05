@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"monkeywrench/internal/runner"
+	"github.com/Mr-b0nzai/MonkeyWrench/internal/runner"
 )
 
 func main() {
