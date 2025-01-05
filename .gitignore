@@ -26,3 +26,4 @@ go.work.sum
 
 # ignore scope.txt
 scope.txt
+build.ps1
