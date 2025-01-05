@@ -118,18 +118,21 @@ type ResponseDetails struct {
 	Body       string `yaml:"body"`
 }
 
-// full mode: sends a request to each URL in the file with all settings enabled
-func fullMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string) {
-	headersMode(url, printRequests, yamlOutput, customHeaders)
+// fullMode now takes a single URL and returns an error
+func fullMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, requestCount chan<- int) error {
+	return headersMode(url, printRequests, yamlOutput, customHeaders, requestCount)
 }
 
 // headersMode function
-func headersMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string) {
+func headersMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, requestCount chan<- int) error {
+	if url == "" || url == "\x00" {
+		return nil
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	url, err := normalizeURL(url)
 	if err != nil {
-		fmt.Printf("[ERROR] Normalizing URL: %v\n", err)
-		return
+		return fmt.Errorf("normalizing URL: %v", err)
 	}
 
 	// List of headers to add
@@ -156,61 +159,53 @@ func headersMode(url string, printRequests bool, yamlOutput bool, customHeaders 
 	}
 
 	for key, value := range headers {
-		// Create a new request for each header
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
-			fmt.Printf("[ERROR] Creating request for %s: %v\n", url, err)
-			continue
+			return fmt.Errorf("creating request: %v", err)
 		}
 
-		// Add the current header
 		req.Header.Add(key, value)
 		for k, v := range customHeaders {
 			req.Header.Add(k, v)
 		}
 
-		// Send the request
 		resp, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("[ERROR] Request to %s failed: %v\n", url, err)
-			continue
+			return fmt.Errorf("sending request: %v", err)
 		}
 		defer resp.Body.Close()
 
-		// Read the response body and handle potential errors
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Printf("[ERROR] Reading response body failed: %v\n", err)
-			continue
+			return fmt.Errorf("reading response body: %v", err)
 		}
 
-		// Create a struct with response details
 		responseDetails := ResponseDetails{
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
 		}
 
-		// Conditionally print the response in YAML format
 		if yamlOutput {
 			yamlData, err := yaml.Marshal(&responseDetails)
 			if err != nil {
-				fmt.Printf("[ERROR] Marshaling response to YAML failed: %v\n", err)
-				continue
+				return fmt.Errorf("marshaling YAML: %v", err)
 			}
-			// Print the YAML output
 			fmt.Println("Response in YAML format:")
 			fmt.Println(string(yamlData))
 		}
 
-		// Print the request method, URL, and headers for debugging
-		fmt.Printf("[%s] URL: %s | Status: %d | Header: %s=%s\n", resp.Request.Method, url, resp.StatusCode, key, value)
+		fmt.Printf("[%s] URL: %s | Status: %d | Header: %s=%s\n",
+			resp.Request.Method, url, resp.StatusCode, key, value)
 
-		// Conditionally print the HTTP request (debugging)
 		if printRequests {
 			fmt.Println("[DEBUG] Printing request in Burp Suite format...")
-			printBurpStyleRequest(req) // This should now print the request in Burp format
+			printBurpStyleRequest(req)
 		}
+
+		requestCount <- 1
 	}
+
+	return nil
 }
 
 // printBurpStyleRequest prints an HTTP request in Burp Suite-style format

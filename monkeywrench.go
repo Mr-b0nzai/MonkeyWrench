@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
+
+	"monkeywrench/internal/runner"
 )
 
 func main() {
@@ -23,13 +27,22 @@ func main() {
 	mode := flag.String("mode", "", "The mode to run: 'full' or 'headers'")
 	filePath := flag.String("file", "", "Path to the file containing URLs")
 	yamlOutput := flag.Bool("yaml", false, "Enable YAML output for responses")
-	customHeaders := flag.String("headers", "", "Comma-separated list of custom headers in 'Key: Value' format. Example: 'X-Forwarded-For: <IP>'")
+	customHeaders := flag.String("H", "", "Comma-separated list of custom headers in 'Key: Value' format. Example: 'X-Forwarded-For: <IP>'")
+	rateLimit := flag.Float64("rate", 0.0, "Rate limit in requests per second")
+	workers := flag.Int("workers", 10, "Number of workers to use")
 
 	flag.Usage = func() {
 		fmt.Println("Usage: go run main.go -mode=<mode> -file=<url_file> [-requests]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	// Validate workers
+	if *workers < 1 {
+		*workers = 1
+	} else if *workers > 100 {
+		*workers = 100
+	}
 
 	if *mode == "" {
 		flag.Usage()
@@ -55,22 +68,43 @@ func main() {
 	// Parse custom headers
 	headers := parseHeaders(*customHeaders)
 
+	// Create runner with rate limit and 10 workers
+	r := runner.New(int(*rateLimit), *workers)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create a channel to count requests
+	requestCount := make(chan int, 1)
+
+	// Launch a goroutine to print the request rate
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		var count int
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Printf("Requests per second: %d\n", count)
+				count = 0
+			case n := <-requestCount:
+				count += n
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Dispatch to modes
 	switch *mode {
 	case "full":
-		for _, url := range urls {
-			if url == "" || url == "\x00" { // Skip empty lines
-				continue
-			}
-			fullMode(url, *printRequests, *yamlOutput, headers) // Pass the printRequests flag
-		}
+		r.Run(ctx, urls, func(url string) error {
+			return fullMode(url, *printRequests, *yamlOutput, headers, requestCount)
+		})
 	case "headers":
-		for _, url := range urls {
-			if url == "" || url == "\x00" { // Skip empty lines
-				continue
-			}
-			headersMode(url, *printRequests, *yamlOutput, headers) // Pass the printRequests flag
-		}
+		r.Run(ctx, urls, func(url string) error {
+			return headersMode(url, *printRequests, *yamlOutput, headers, requestCount)
+		})
 	default:
 		flag.Usage()
 	}
