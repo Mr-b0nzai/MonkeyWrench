@@ -30,6 +30,7 @@ func main() {
 	customHeaders := flag.String("H", "", "Comma-separated list of custom headers in 'Key: Value' format. Example: 'X-Forwarded-For: <IP>'")
 	rateLimit := flag.Float64("rate", 0.0, "Rate limit in requests per second")
 	workers := flag.Int("workers", 10, "Number of workers to use")
+	help := flag.Bool("h", false, "Display help manual")
 
 	flag.Usage = func() {
 		fmt.Println("Usage: go run main.go -mode=<mode> -file=<url_file> [-requests]")
@@ -42,6 +43,12 @@ func main() {
 		*workers = 1
 	} else if *workers > 100 {
 		*workers = 100
+	}
+
+	// Display help manual if -h flag is set
+	if *help {
+		displayHelp()
+		os.Exit(0)
 	}
 
 	if *mode == "" {
@@ -108,4 +115,28 @@ func main() {
 	default:
 		flag.Usage()
 	}
+}
+
+func displayHelp() {
+	fmt.Println(`MonkeyWrench Help Manual
+
+	Usage: monkeywrench [options]
+
+	Options:
+	-mode [string]       The mode to run: 'full' or 'headers' (default: "")
+	-file [path]         Path to the file containing URLs (default: "")
+	-requests            Print HTTP requests in Burp Suite style (default: false)
+	-yaml                Enable YAML output for responses (default: false)
+	-H [string]          Comma-separated list of custom headers in 'Key: Value' format. Example: 'X-Forwarded-For: <IP>' (default: "")
+	-rate [float]        Rate limit in requests per second (default: 0.0, unlimited)
+	-workers [int]       Number of workers to use (default: 10)
+	-h                   Display this help manual (default: false)
+
+	Examples:
+	# Full mode with custom headers
+	monkeywrench -mode=full -file=urls.txt -H="User-Agent: Mozilla, X-Test: Test"
+
+	# Headers mode with stdin input and YAML output
+	cat urls.txt | monkeywrench -mode=headers -yaml -requests
+	`)
 }
