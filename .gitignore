@@ -24,6 +24,6 @@ go.work.sum
 # env file
 .env
 
-# ignore scope.txt
 scope.txt
+test.txt
 build.ps1

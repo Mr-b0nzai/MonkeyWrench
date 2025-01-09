@@ -16,6 +16,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Add color constants at top of file
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+)
+
+// Add helper function for status code coloring
+func getStatusColor(code int) string {
+	switch {
+	case code >= 500:
+		return colorRed
+	case code >= 400:
+		return colorYellow
+	case code >= 300:
+		return colorBlue
+	case code >= 200:
+		return colorGreen
+	default:
+		return colorReset
+	}
+}
+
 // decodeUTF16 decodes a UTF-16 byte slice to a UTF-8 string
 func decodeUTF16(b []byte) string {
 	if len(b)%2 != 0 {
@@ -118,97 +143,17 @@ type ResponseDetails struct {
 	Body       string `yaml:"body"`
 }
 
-// fullMode now takes a single URL and returns an error
-func fullMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, requestCount chan<- int) error {
-	return headersMode(url, printRequests, yamlOutput, customHeaders, requestCount)
-}
-
-// headersMode function
-func headersMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, requestCount chan<- int) error {
-	if url == "" || url == "\x00" {
-		return nil
-	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	url, err := normalizeURL(url)
-	if err != nil {
-		return fmt.Errorf("normalizing URL: %v", err)
-	}
-
-	// List of headers to add
-	headers := map[string]string{
-		"X-Forwarded-For":           "127.0.0.1",
-		"Client-IP":                 "127.0.0.1",
-		"Cluster-Client-IP":         "127.0.0.1",
-		"Connection":                "keep-alive",
-		"Content-Length":            "0",
-		"Forwarded-For":             "127.0.0.1",
-		"Host":                      "example.com",
-		"Referer":                   "https://example.com",
-		"True-Client-IP":            "127.0.0.1",
-		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-		"X-Custom-IP-Authorization": "127.0.0.1",
-		"X-Forwarded":               "127.0.0.1",
-		"X-Forwarded-Port":          "443",
-		"X-Original-URL":            "/original-url",
-		"X-Originating-IP":          "127.0.0.1",
-		"X-ProxyUser-Ip":            "127.0.0.1",
-		"X-Remote-Addr":             "127.0.0.1",
-		"X-Remote-IP":               "127.0.0.1",
-		"X-Rewrite-URL":             "/rewrite-url",
-	}
-
-	for key, value := range headers {
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return fmt.Errorf("creating request: %v", err)
-		}
-
-		req.Header.Add(key, value)
-		for k, v := range customHeaders {
-			req.Header.Add(k, v)
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("sending request: %v", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("reading response body: %v", err)
-		}
-
-		responseDetails := ResponseDetails{
-			StatusCode: resp.StatusCode,
-			Body:       string(body),
-		}
-
-		if yamlOutput {
-			yamlData, err := yaml.Marshal(&responseDetails)
-			if err != nil {
-				return fmt.Errorf("marshaling YAML: %v", err)
-			}
-			fmt.Println("Response in YAML format:")
-			fmt.Println(string(yamlData))
-		}
-
-		fmt.Printf("[%s] URL: %s | Status: %d | Header: %s=%s\n",
-			resp.Request.Method, url, resp.StatusCode, key, value)
-
-		if printRequests {
-			fmt.Println("[DEBUG] Printing request in Burp Suite format...")
-			printBurpStyleRequest(req)
-		}
-
-		requestCount <- 1
-	}
-
-	return nil
-}
-
 // printBurpStyleRequest prints an HTTP request in Burp Suite-style format
+// contains checks if a slice contains a specific value
+func contains(slice []int, val int) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
+}
+
 func printBurpStyleRequest(req *http.Request) {
 	// Start with the request line
 	fmt.Printf("%s %s HTTP/1.1\n", req.Method, req.URL.RequestURI())
@@ -267,4 +212,176 @@ func parseHeaders(headerString string) map[string]string {
 	}
 
 	return headers
+}
+
+// fullMode now takes a single URL and returns an error
+func fullMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, filterSize []int, filterWords []int, filterStatus []int, filterLines []int, matchSize []int, matchWords []int, matchStatus []int, matchLines []int, method string, debug bool, simple bool) error {
+	return headersMode(url, printRequests, yamlOutput, customHeaders, filterSize, filterWords, filterStatus, filterLines, matchSize, matchWords, matchStatus, matchLines, method, debug, simple)
+}
+
+// headersMode function
+func headersMode(url string, printRequests bool, yamlOutput bool, customHeaders map[string]string, filterSize []int, filterWords []int, filterStatus []int, filterLines []int, matchSize []int, matchWords []int, matchStatus []int, matchLines []int, method string, debug bool, simple bool) error {
+	// Ensure method is uppercase
+	method = strings.ToUpper(method)
+
+	// Add debug logging for method
+	if debug {
+		fmt.Printf("[DEBUG] Using HTTP method: %s\n", method)
+	}
+	if url == "" || url == "\x00" {
+		return nil
+	}
+
+	// Create custom client with CheckRedirect function
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Preserve the original method on redirect
+			req.Method = method
+			return nil
+		},
+	}
+	url, err := normalizeURL(url)
+	if err != nil {
+		return fmt.Errorf("normalizing URL: %v", err)
+	}
+
+	// List of headers to add
+	headers := map[string]string{
+		"X-Forwarded-For":           "127.0.0.1",
+		"Client-IP":                 "127.0.0.1",
+		"Cluster-Client-IP":         "127.0.0.1",
+		"Connection":                "keep-alive",
+		"Content-Length":            "0",
+		"Forwarded-For":             "127.0.0.1",
+		"Host":                      "example.com",
+		"Referer":                   "https://example.com",
+		"True-Client-IP":            "127.0.0.1",
+		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+		"X-Custom-IP-Authorization": "127.0.0.1",
+		"X-Forwarded":               "127.0.0.1",
+		"X-Forwarded-Port":          "443",
+		"X-Original-URL":            "/original-url",
+		"X-Originating-IP":          "127.0.0.1",
+		"X-ProxyUser-Ip":            "127.0.0.1",
+		"X-Remote-Addr":             "127.0.0.1",
+		"X-Remote-IP":               "127.0.0.1",
+		"X-Rewrite-URL":             "/rewrite-url",
+	}
+
+	for key, value := range headers {
+		if debug {
+			fmt.Printf("[DEBUG] Creating request with method %s for header %s=%s\n", method, key, value)
+		}
+
+		req, err := http.NewRequest(method, url, nil)
+		if err != nil {
+			return fmt.Errorf("creating request: %v", err)
+		}
+
+		// Verify request method before adding headers
+		if req.Method != method {
+			return fmt.Errorf("method mismatch before headers: expected %s, got %s", method, req.Method)
+		}
+
+		req.Header.Add(key, value)
+		for k, v := range customHeaders {
+			req.Header.Add(k, v)
+		}
+
+		// Verify request method before sending
+		if req.Method != method {
+			return fmt.Errorf("method mismatch before send: expected %s, got %s", method, req.Method)
+		}
+
+		if debug {
+			fmt.Printf("[DEBUG] Sending request with method: %s\n", req.Method)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		// Verify response request method
+		if resp.Request.Method != method {
+			fmt.Printf("[ERROR] Method changed during request: expected %s, got %s\n", method, resp.Request.Method)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("reading response body: %v", err)
+		}
+
+		// Filter responses
+		if len(filterSize) > 0 && contains(filterSize, len(body)) {
+			continue
+		}
+		if len(filterWords) > 0 && contains(filterWords, wordCount(string(body))) {
+			continue
+		}
+		if len(filterStatus) > 0 && contains(filterStatus, resp.StatusCode) {
+			continue
+		}
+		if len(filterLines) > 0 && contains(filterLines, lineCount(string(body))) {
+			continue
+		}
+
+		// Match responses
+		if len(matchSize) > 0 && !contains(matchSize, len(body)) {
+			continue
+		}
+		if len(matchWords) > 0 && !contains(matchWords, wordCount(string(body))) {
+			continue
+		}
+		if len(matchStatus) > 0 && !contains(matchStatus, resp.StatusCode) {
+			continue
+		}
+		if len(matchLines) > 0 && !contains(matchLines, lineCount(string(body))) {
+			continue
+		}
+
+		responseDetails := ResponseDetails{
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+		}
+
+		if yamlOutput {
+			yamlData, err := yaml.Marshal(&responseDetails)
+			if err != nil {
+				return fmt.Errorf("marshaling YAML: %v", err)
+			}
+			fmt.Println("Response in YAML format:")
+			fmt.Println(string(yamlData))
+		}
+
+		if simple {
+			fmt.Fprintln(os.Stdout, url)
+		} else {
+			// Print detailed output to stdout
+			fmt.Fprintf(os.Stdout, "%s%s | %d | %s | %s: %s | Size: %d%s\n",
+				getStatusColor(resp.StatusCode),
+				resp.Request.Method,
+				resp.StatusCode,
+				url,
+				key,
+				value,
+				len(body),
+				colorReset)
+		}
+
+		if debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Request completed: %s\n", url)
+		}
+
+		if printRequests {
+			fmt.Println("[DEBUG] Printing request in Burp Suite format...")
+			printBurpStyleRequest(req)
+		}
+
+	}
+
+	return nil
 }
